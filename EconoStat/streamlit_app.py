@@ -1,7 +1,8 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import matplotlib.pyplot as plt
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- Custom CSS ---
 st.markdown(
@@ -12,37 +13,10 @@ st.markdown(
         background-attachment: fixed;
         font-family: 'Poppins', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
-    .header-container {
-        display: flex;
-        align-items: center; /* sejajar vertikal */
-        justify-content: center;
-        gap: 20px;
-    }
-    .header-title {
-        font-size: 42px;
-        font-weight: 700;
-        color: #ffffff;
-        text-shadow: 3px 3px 6px rgba(0,0,0,0.4);
-        letter-spacing: 1.5px;
-    }
-    .subtitle {
-        text-align: center;
-        font-size: 22px;
-        color: #1a3d7c;
-        margin-bottom: 30px;
-        font-weight: 500;
-        text-shadow: 1px 1px 3px rgba(0,0,0,0.2);
-    }
-    .watermark {
-        position: fixed;
-        bottom: 10px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 12px;
-        color: rgba(255,255,255,0.6);
-        font-family: monospace;
-        z-index: 9999;
-    }
+    .header-container { display: flex; align-items: center; justify-content: center; gap: 20px; }
+    .header-title { font-size: 42px; font-weight: 700; color: #ffffff; text-shadow: 3px 3px 6px rgba(0,0,0,0.4); letter-spacing: 1.5px; }
+    .subtitle { text-align: center; font-size: 22px; color: #1a3d7c; margin-bottom: 30px; font-weight: 500; text-shadow: 1px 1px 3px rgba(0,0,0,0.2); }
+    .watermark { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,0.6); font-family: monospace; z-index: 9999; }
     </style>
     """,
     unsafe_allow_html=True
@@ -51,27 +25,30 @@ st.markdown(
 # --- Header ---
 col1, col2 = st.columns([1,4])
 with col1:
-    st.image("Lambang_Badan_Pusat_Statistik_(BPS)_Indonesia.svg.png", width=120)  # pastikan file ada di folder project
+    st.image("Lambang_Badan_Pusat_Statistik_(BPS)_Indonesia.svg.png", width=120)
 with col2:
-    st.markdown(
-        "<div class='header-title'>EconoStat Kota Mojokerto 3576</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<div class='header-title'>EconoStat Kota Mojokerto 3576</div>", unsafe_allow_html=True)
 
 st.markdown("<div class='watermark'>output@developer_ananda_sakinah</div>", unsafe_allow_html=True)
 
 # --- Koneksi ke Google Sheets ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-existing_data = conn.read(worksheet="Triwulanan", usecols=list(range(9)), ttl=5)
+creds_dict = st.secrets["connections"]["gsheets"]
+scope = ["https://www.googleapis.com/auth/spreadsheets"]
+creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_url(creds_dict["spreadsheet"]).worksheet("Triwulanan")
+
+# Ambil data
+existing_data = pd.DataFrame(sheet.get_all_records())
 existing_data = existing_data.dropna(how="all")
 
-# --- Navigasi ---
+# --- Navigasi halaman ---
 if "page" not in st.session_state:
     st.session_state.page = "form"
 
+# --- Halaman Form ---
 if st.session_state.page == "form":
     st.markdown("<div class='subtitle'>Silahkan Input Data Triwulanan di Bawah Ini.</div>", unsafe_allow_html=True)
-
     with st.form(key="Econostat"):
         date = st.date_input("Tahun/Bulan/Tanggal", key="date")
         apbd = st.number_input("Realisasi APBD Triwulan", min_value=0, key="apbd")
@@ -82,25 +59,27 @@ if st.session_state.page == "form":
         inflasi = st.number_input("Data Inflasi Bulanan Kota Kediri", min_value=0.0, format="%.2f", key="inflasi")
         ekspor = st.number_input("Data Nilai Ekspor Luar Negeri Triwulanan", min_value=0, key="ekspor")
         padi = st.number_input("Produksi Komoditas Padi Triwulanan", min_value=0, key="padi")
-
         submit_button = st.form_submit_button("Submit Econostat Details")
+
         if submit_button:
-            new_row = pd.DataFrame({
-                "Tanggal": [date.strftime("%d/%m/%Y")],  # format DD/MM/YYYY
-                "Realisasi APBD": [apbd],
-                "Realisasi PMA": [pma],
-                "Realisasi PMDN": [pmdn],
-                "Belanja Infrastruktur": [infra],
-                "IPH Mojokerto": [iph],
-                "Inflasi Kediri": [inflasi],
-                "Ekspor Luar Negeri": [ekspor],
-                "Produksi Padi": [padi],
-            })
-            existing_data = pd.concat([existing_data, new_row], ignore_index=True)
-            conn.update(worksheet="Triwulanan", data=existing_data)
+            new_row = {
+                "Tanggal": date.strftime("%d/%m/%Y"),
+                "Realisasi APBD": apbd,
+                "Realisasi PMA": pma,
+                "Realisasi PMDN": pmdn,
+                "Belanja Infrastruktur": infra,
+                "IPH Mojokerto": iph,
+                "Inflasi Kediri": inflasi,
+                "Ekspor Luar Negeri": ekspor,
+                "Produksi Padi": padi,
+            }
+            existing_data = pd.concat([existing_data, pd.DataFrame([new_row])], ignore_index=True)
+            # Update Google Sheet
+            sheet.clear()
+            sheet.update([existing_data.columns.values.tolist()] + existing_data.values.tolist())
             st.success("Data berhasil disubmit dan disimpan!")
 
-            # Reset nilai input ke default agar kosong kembali
+            # Reset session_state
             for key in ["date","apbd","pma","pmdn","infra","iph","inflasi","ekspor","padi"]:
                 if key in st.session_state:
                     del st.session_state[key]
@@ -109,60 +88,43 @@ if st.session_state.page == "form":
         st.session_state.page = "grafik"
         st.rerun()
 
+# --- Halaman Grafik ---
 elif st.session_state.page == "grafik":
     st.markdown("<div class='subtitle'>Mohon dicermati baik-baik visualisasi dan tren di bawah ini.</div>", unsafe_allow_html=True)
     st.header("Dashboard Triwulanan")
 
     df = existing_data.copy()
     if "Tanggal" in df.columns:
-        # Konversi tipe data dengan dayfirst=True
         df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce", dayfirst=True)
-        df["Realisasi APBD"] = pd.to_numeric(df["Realisasi APBD"], errors="coerce").astype("Int64")
-        df["Realisasi PMA"] = pd.to_numeric(df["Realisasi PMA"], errors="coerce").astype("Int64")
-        df["Realisasi PMDN"] = pd.to_numeric(df["Realisasi PMDN"], errors="coerce").astype("Int64")
-        df["Belanja Infrastruktur"] = pd.to_numeric(df["Belanja Infrastruktur"], errors="coerce").astype("Int64")
-        df["Ekspor Luar Negeri"] = pd.to_numeric(df["Ekspor Luar Negeri"], errors="coerce").astype("Int64")
-        df["Produksi Padi"] = pd.to_numeric(df["Produksi Padi"], errors="coerce").astype("Int64")
-        df["IPH Mojokerto"] = pd.to_numeric(df["IPH Mojokerto"], errors="coerce").astype("float64")
-        df["Inflasi Kediri"] = pd.to_numeric(df["Inflasi Kediri"], errors="coerce").astype("float64")
-
-        df["Tahun"] = df["Tanggal"].dt.year.astype("Int64")
+        numeric_cols = ["Realisasi APBD","Realisasi PMA","Realisasi PMDN","Belanja Infrastruktur",
+                        "Ekspor Luar Negeri","Produksi Padi","IPH Mojokerto","Inflasi Kediri"]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["Tahun"] = df["Tanggal"].dt.year
         df["Triwulan"] = df["Tanggal"].dt.quarter
         df = df.set_index("Tanggal")
 
-        tahun_list = sorted(df["Tahun"].dropna().unique())
-        selected_year = st.selectbox("Pilih Tahun", tahun_list)
-
+        selected_year = st.selectbox("Pilih Tahun", sorted(df["Tahun"].dropna().unique()))
         mode = st.radio("Pilih Mode Tampilan", ("Seluruh Tahun", "Satu Triwulan"))
+
         if mode == "Satu Triwulan":
-            triwulan_list = [1,2,3,4]
-            selected_quarter = st.selectbox("Pilih Triwulan (Q1-Q4)", triwulan_list)
-            df_filtered = df[(df["Tahun"] == selected_year) & (df["Triwulan"] == selected_quarter)]
+            selected_quarter = st.selectbox("Pilih Triwulan (Q1-Q4)", [1,2,3,4])
+            df_filtered = df[(df["Tahun"]==selected_year) & (df["Triwulan"]==selected_quarter)]
         else:
-            df_filtered = df[df["Tahun"] == selected_year]
+            df_filtered = df[df["Tahun"]==selected_year]
 
         if not df_filtered.empty:
             latest = df_filtered.iloc[-1]
+            prev = df_filtered.iloc[-2] if len(df_filtered)>1 else latest
+            delta_apbd = latest["Realisasi APBD"] - prev["Realisasi APBD"]
+            delta_pma = latest["Realisasi PMA"] - prev["Realisasi PMA"]
+            delta_pmdn = latest["Realisasi PMDN"] - prev["Realisasi PMDN"]
 
-            # Hitung delta dibandingkan data sebelumnya
-            if len(df_filtered) > 1:
-                prev = df_filtered.iloc[-2]
-                delta_apbd = latest["Realisasi APBD"] - prev["Realisasi APBD"]
-                delta_pma = latest["Realisasi PMA"] - prev["Realisasi PMA"]
-                delta_pmdn = latest["Realisasi PMDN"] - prev["Realisasi PMDN"]
-            else:
-                delta_apbd = delta_pma = delta_pmdn = 0
-
-            # Metrics dengan delta
-            col1, col2, col3 = st.columns(3)
-            col1.metric("APBD", f"{latest['Realisasi APBD']:,}", f"{delta_apbd:,}")
-            # Metrics dengan delta
             col1, col2, col3 = st.columns(3)
             col1.metric("APBD", f"{latest['Realisasi APBD']:,}", f"{delta_apbd:,}")
             col2.metric("PMA", f"{latest['Realisasi PMA']:,}", f"{delta_pma:,}")
             col3.metric("PMDN", f"{latest['Realisasi PMDN']:,}", f"{delta_pmdn:,}")
 
-            # Grafik tren APBD, PMA, PMDN, Infrastruktur
             st.subheader(f"Tren {mode} Tahun {selected_year}")
             st.line_chart(df_filtered[["Realisasi APBD","Realisasi PMA","Realisasi PMDN","Belanja Infrastruktur"]])
 
@@ -201,7 +163,6 @@ elif st.session_state.page == "grafik":
                         fontsize=18, fontweight="bold")
             st.pyplot(fig)
 
-            # Tombol Back untuk kembali ke halaman form
             if st.button("⬅️ Back"):
                 st.session_state.page = "form"
                 st.rerun()
